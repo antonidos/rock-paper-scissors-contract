@@ -9,6 +9,8 @@ import "@chainlink/contracts/src/v0.8/ConfirmedOwner.sol";
 interface ERC20 {
     function allowance(address _owner, address _spender) external view returns (uint256 remaining);
     function transferFrom(address _from, address _to, uint256 _value) external returns (bool success);
+    function balanceOf(address _owner) external view returns (uint256 balance);
+    function transfer(address _to, uint256 _value) external returns (bool success);
 }
 
 contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
@@ -126,6 +128,7 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
         require(_choice >= 1 && _choice <= 3, "invalid choice");
         require(allowedTokensMapping[_token] == true, "invalid token");
         require(ERC20(_token).allowance(msg.sender, address(this)) >= _bet, "need to approve token");
+        require(ERC20(_token).balanceOf(address(this)) >= _bet * 2, "insufficent funds on the contract");
 
         ERC20(_token).transferFrom(msg.sender, address(this), _bet);
 
@@ -161,8 +164,8 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
 
         //action with bet
         Game memory game = games[_requestId];
-        if(result == 1) ERC20(game.token).transferFrom(address(this), game.player, game.bet);
-        if(result == 2) ERC20(game.token).transferFrom(address(this), game.player, game.bet * 2);
+        if(result == 1) ERC20(game.token).transfer(game.player, game.bet);
+        if(result == 2) ERC20(game.token).transfer(game.player, game.bet * 2);
 
         emit GameEnd(_requestId, result);
         games[_requestId].result = result;
