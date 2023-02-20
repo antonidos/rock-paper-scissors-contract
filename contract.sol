@@ -16,7 +16,7 @@ interface ERC20 {
 contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
     event RequestSent(uint256 requestId, uint32 numWords);
     event RequestFulfilled(uint256 requestId, uint256 randomNumber);
-    event GameEnd(uint256 requestId, uint8 result);
+    event GameEnd(uint256 requestId, address player, uint8 result);
 
     struct Game {
         uint8 choice;
@@ -25,6 +25,8 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
         address token;
         uint8 result;
     }
+
+    receive() external payable {}
 
     struct RequestStatus {
         bool fulfilled; // whether the request has been successfully fulfilled
@@ -124,11 +126,25 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
         allowedTokens.pop();
     }
 
+    function startGameBnb(uint8 _choice) public payable{
+        require(_choice >= 1 && _choice <= 3, "invalid choice");
+        require(address(this).balance >= msg.value, "insufficent funds on the contract");
+
+        uint requestId = requestRandomNumber();
+        games[requestId] = Game({
+            bet: msg.value,
+            choice: _choice,
+            player: msg.sender,
+            token: 0x0000000000000000000000000000000000000000,
+            result: 4
+        });
+    }
+
     function startGame(address _token, uint8 _choice, uint256 _bet) public {
         require(_choice >= 1 && _choice <= 3, "invalid choice");
         require(allowedTokensMapping[_token] == true, "invalid token");
         require(ERC20(_token).allowance(msg.sender, address(this)) >= _bet, "need to approve token");
-        require(ERC20(_token).balanceOf(address(this)) >= _bet * 2, "insufficent funds on the contract");
+        require(ERC20(_token).balanceOf(address(this)) >= _bet, "insufficent funds on the contract");
 
         ERC20(_token).transferFrom(msg.sender, address(this), _bet);
 
@@ -164,10 +180,30 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
 
         //action with bet
         Game memory game = games[_requestId];
-        if(result == 1) ERC20(game.token).transfer(game.player, game.bet);
-        if(result == 2) ERC20(game.token).transfer(game.player, game.bet * 2);
+        if(game.token == 0x0000000000000000000000000000000000000000) {
+            if(result == 1) {
+                (bool sent, ) = game.player.call{value: game.bet}("");
+                require(sent, "Failed to send Ether");
+            } 
+            if(result == 2) {
+                (bool sent, ) = game.player.call{value: game.bet * 2}("");
+                require(sent, "Failed to send Ether");
+            }
+        } else {
+            if(result == 1) ERC20(game.token).transfer(game.player, game.bet);
+            if(result == 2) ERC20(game.token).transfer(game.player, game.bet * 2);
+        }
 
-        emit GameEnd(_requestId, result);
+        emit GameEnd(_requestId, game.player, result);
         games[_requestId].result = result;
     }
+
+    function withdraw() public onlyOwner {
+        uint256 amount = address(this).balance;
+        require(amount > 0, "Nothing to withdraw; contract balance empty");
+    
+        address _owner = owner();
+        (bool sent, ) = _owner.call{value: amount}("");
+        require(sent, "Failed to send Ether");
+  }
 }
