@@ -7,10 +7,22 @@ import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 import "@chainlink/contracts/src/v0.8/ConfirmedOwner.sol";
 
 interface ERC20 {
-    function allowance(address _owner, address _spender) external view returns (uint256 remaining);
-    function transferFrom(address _from, address _to, uint256 _value) external returns (bool success);
+    function allowance(address _owner, address _spender)
+        external
+        view
+        returns (uint256 remaining);
+
+    function transferFrom(
+        address _from,
+        address _to,
+        uint256 _value
+    ) external returns (bool success);
+
     function balanceOf(address _owner) external view returns (uint256 balance);
-    function transfer(address _to, uint256 _value) external returns (bool success);
+
+    function transfer(address _to, uint256 _value)
+        external
+        returns (bool success);
 }
 
 contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
@@ -25,6 +37,8 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
         address token;
         uint8 result;
     }
+
+    mapping(address => uint256) public isClaimedToday;
 
     receive() external payable {}
 
@@ -59,13 +73,12 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
             0x6A2AAd07396B36Fe02a22b33cf443582f682c82f
         );
         s_subscriptionId = subscriptionId;
+        addToken(0xee8908AB53993e596A373ddbcb3AC5656aD6Aa38);
+        addToken(0x1541dAF6e7Fa4C32d11e70Ad95259f4139eFFCd7);
+        addToken(0x44A1Ec8DB904275899d788b6b27b86a549216577);
     }
 
-    function requestRandomNumber()
-        internal
-        onlyOwner
-        returns (uint256 requestId)
-    {
+    function requestRandomNumber() internal returns (uint256 requestId) {
         requestId = COORDINATOR.requestRandomWords(
             keyHash,
             s_subscriptionId,
@@ -110,9 +123,33 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
     address[] public allowedTokens;
     mapping(address => bool) public allowedTokensMapping;
 
-    function addToken(address _token) external onlyOwner {
+    function addToken(address _token) public onlyOwner {
+        require(!allowedTokensMapping[_token], "token already using");
         allowedTokens.push(_token);
         allowedTokensMapping[_token] = true;
+    }
+
+    function getTestTokens(address _token) public {
+        uint256 timeDifference = block.timestamp - isClaimedToday[msg.sender];
+        require(
+            ERC20(_token).balanceOf(address(this)) >= 100 ether,
+            "insufficent funds on the contract"
+        );
+        require(
+            timeDifference >= (24 hours),
+            "You already claimed some tokens this day"
+        );
+
+        (bool sent, ) = _token.call(
+            abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                msg.sender,
+                100 ether
+            )
+        );
+        require(sent, "Failed to send token");
+
+        isClaimedToday[msg.sender] = block.timestamp;
     }
 
     function removeToken(uint256 _index) external onlyOwner {
@@ -126,11 +163,14 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
         allowedTokens.pop();
     }
 
-    function startGameBnb(uint8 _choice) public payable{
+    function startGameBnb(uint8 _choice) public payable {
         require(_choice >= 1 && _choice <= 3, "invalid choice");
-        require(address(this).balance >= msg.value, "insufficent funds on the contract");
+        require(
+            address(this).balance >= msg.value * 2,
+            "insufficent funds on the contract"
+        );
 
-        uint requestId = requestRandomNumber();
+        uint256 requestId = requestRandomNumber();
         games[requestId] = Game({
             bet: msg.value,
             choice: _choice,
@@ -140,15 +180,37 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
         });
     }
 
-    function startGame(address _token, uint8 _choice, uint256 _bet) public {
+    function startGame(
+        address _token,
+        uint8 _choice,
+        uint256 _bet
+    ) public {
         require(_choice >= 1 && _choice <= 3, "invalid choice");
         require(allowedTokensMapping[_token] == true, "invalid token");
-        require(ERC20(_token).allowance(msg.sender, address(this)) >= _bet, "need to approve token");
-        require(ERC20(_token).balanceOf(address(this)) >= _bet, "insufficent funds on the contract");
+        require(
+            ERC20(_token).allowance(msg.sender, address(this)) >= _bet,
+            "need to approve token"
+        );
+        require(
+            ERC20(_token).balanceOf(address(this)) >= _bet * 2,
+            "insufficent funds on the contract"
+        );
+        require(
+            ERC20(_token).balanceOf(msg.sender) >= _bet,
+            "insufficent funds"
+        );
 
-        ERC20(_token).transferFrom(msg.sender, address(this), _bet);
+        (bool sent, ) = _token.call(
+            abi.encodeWithSignature(
+                "transferFrom(address,address,uint256)",
+                msg.sender,
+                address(this),
+                _bet
+            )
+        );
+        require(sent, "Failed to send token");
 
-        uint requestId = requestRandomNumber();
+        uint256 requestId = requestRandomNumber();
         games[requestId] = Game({
             bet: _bet,
             choice: _choice,
@@ -159,39 +221,59 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
     }
 
     // 0 is lose, 1 is nobody, 2 is win
-    function calculateWinner(uint256 _randomNumber, uint256 _requestId) internal {
+    function calculateWinner(uint256 _randomNumber, uint256 _requestId)
+        internal
+    {
         uint8 choice = games[_requestId].choice;
         uint8 result;
 
         //calculating result
-        if(_randomNumber == choice) result = 1;
-        if(_randomNumber == 1) {
-            if(choice == 2) result = 0;
-            else if(choice == 3) result = 2;
+        if (_randomNumber == choice) result = 1;
+        if (_randomNumber == 1) {
+            if (choice == 2) result = 0;
+            else if (choice == 3) result = 2;
         }
-        if(_randomNumber == 2) {
-            if(choice == 3) result = 0;
-            else if(choice == 1) result = 2;
+        if (_randomNumber == 2) {
+            if (choice == 3) result = 0;
+            else if (choice == 1) result = 2;
         }
-        if(_randomNumber == 3) {
-            if(choice == 1) result = 0;
-            else if(choice == 2) result = 2;
+        if (_randomNumber == 3) {
+            if (choice == 1) result = 0;
+            else if (choice == 2) result = 2;
         }
 
         //action with bet
         Game memory game = games[_requestId];
-        if(game.token == 0x0000000000000000000000000000000000000000) {
-            if(result == 1) {
+        if (game.token == 0x0000000000000000000000000000000000000000) {
+            if (result == 1) {
                 (bool sent, ) = game.player.call{value: game.bet}("");
                 require(sent, "Failed to send Ether");
-            } 
-            if(result == 2) {
+            }
+            if (result == 2) {
                 (bool sent, ) = game.player.call{value: game.bet * 2}("");
                 require(sent, "Failed to send Ether");
             }
         } else {
-            if(result == 1) ERC20(game.token).transfer(game.player, game.bet);
-            if(result == 2) ERC20(game.token).transfer(game.player, game.bet * 2);
+            if (result == 1) {
+                (bool sent, ) = game.token.call(
+                    abi.encodeWithSignature(
+                        "transfer(address,uint256)",
+                        game.player,
+                        game.bet
+                    )
+                );
+                require(sent, "Failed to send token");
+            }
+            if (result == 2) {
+                (bool sent, ) = game.token.call(
+                    abi.encodeWithSignature(
+                        "transfer(address,uint256)",
+                        game.player,
+                        game.bet * 2
+                    )
+                );
+                require(sent, "Failed to send token");
+            }
         }
 
         emit GameEnd(_requestId, game.player, result);
@@ -201,9 +283,20 @@ contract RockPaperScissors is VRFConsumerBaseV2, ConfirmedOwner {
     function withdraw() public onlyOwner {
         uint256 amount = address(this).balance;
         require(amount > 0, "Nothing to withdraw; contract balance empty");
-    
+
         address _owner = owner();
         (bool sent, ) = _owner.call{value: amount}("");
         require(sent, "Failed to send Ether");
-  }
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        uint256 amount = ERC20(_token).balanceOf(address(this));
+        require(amount > 0, "Nothing to withdraw; contract balance empty");
+
+        address _owner = owner();
+        (bool sent, ) = _token.call(
+            abi.encodeWithSignature("transfer(address,uint256)", _owner, amount)
+        );
+        require(sent, "Failed to send token");
+    }
 }
